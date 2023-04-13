@@ -1,0 +1,47 @@
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Fortran module files
+*.mod
+*.smod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+
+# Bitfiles, Bias files and recording files
+*.bit
+*.dat
+*.bias
+
+# Folders
+/results/**
+/src/gaia/bitfiles/**
+/src/gaia/Recordings/**
+/src/gaia/Biases/**
+/src/gaia/event_hist/**
+/src/gaia/media/**
+/src/gaia/tmp_git/**
+
+# Other files
+/.idea/
+/.vscode/
+
+
+
+
