@@ -36,12 +36,15 @@
 /src/gaia/Biases/**
 /src/gaia/event_hist/**
 /src/gaia/media/**
-/src/gaia/tmp_git/**
+/src/gaia/tmp_gif/**
+/src/gaia/event_analysis/**
 
-# Other files
-/.idea/
-/.vscode/
 
+# Other files/folders
+**/.idea/**
+**/.vscode/**
+**/.ipynb_checkpoints/**
+**/.DS_Store
 
 
 
