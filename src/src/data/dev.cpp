@@ -188,7 +188,6 @@ bool Dev::read() {
 
 //bool Dev::read(std::queue<Event2d>* ev_buffer)
 bool Dev::read(moodycamel::ConcurrentQueue<Event2d>* ev_buffer) 
-
 {
     long ret;
     dev->UpdateWireOuts();
@@ -196,20 +195,20 @@ bool Dev::read(moodycamel::ConcurrentQueue<Event2d>* ev_buffer)
     //std::cout << "data_count: "<< data_count <<std::endl;
     uint32_t fifo_full = dev->GetWireOutValue(READ_fifo_full);
 
-  /*if (false == exitOnError((okCFrontPanel::ErrorCode)ret))
+  if (false == exitOnError((okCFrontPanel::ErrorCode)ret))
   {
     std::cout << "Error" << std::endl;
-  }*/
+  }
 
   if (fifo_full == 1)
   {
     data_count = LEN_FIFO;
     std::cout << "Fifo full" <<std::endl;
   }
-  if (data_count < BLOCK_SIZE/8) {
+  if (data_count < BLOCK_SIZE/8) 
+  {
     return(true);
   }
-
   for (unsigned int k = 0 ; k < (data_count*4)/BLOCK_SIZE ; k++) {
 
        ret = dev->ReadFromBlockPipeOut(READ_ADDR, BLOCK_SIZE, BLOCK_SIZE, &g_rbuf[0]);
@@ -301,6 +300,16 @@ bool Dev::read(moodycamel::ConcurrentQueue<Event2d>* ev_buffer)
 
 }
 
+
+/*
+void Dev::listen(std::queue<Event2d>* ev_buffer) {
+  while(is_listening) {
+    read(ev_buffer);
+   // std::this_thread::sleep_for(std::chrono::milliseconds(READ_DELAY));
+  }
+}
+*/
+
 void Dev::listen(moodycamel::ConcurrentQueue<Event2d>* ev_buffer) {
     while (is_listening) {
         read(ev_buffer);
@@ -308,13 +317,7 @@ void Dev::listen(moodycamel::ConcurrentQueue<Event2d>* ev_buffer) {
     }
 }
 
-/*void Dev::listen(std::queue<Event2d>* ev_buffer) {
-  while(is_listening) {
-    read(ev_buffer);
-   // std::this_thread::sleep_for(std::chrono::milliseconds(READ_DELAY));
-  }
-}
-
+/*
 void Dev::join_thread(std::queue<Event2d>* ev_buffer) {
   is_listening = true;
   listener = std::thread([this, ev_buffer]{listen(ev_buffer);});

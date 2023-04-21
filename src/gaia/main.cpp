@@ -39,14 +39,14 @@
 
 
 //top_sv_old works, but weird
-
 //top_sv_led!
 // top_sv_0504_nodelay_FSMFAST == error10
 //top_sv_0504_nodelay_notrig
+
 #define XILINX_CONFIGURATION_FILE  "bitfiles/top_sv_0504_nodelay_FSMFAST.bit"
 volatile sig_atomic_t done = 0;
 
-void my_handler(int a){ 
+void my_handler(int a){
   done = 1;
 }
 
@@ -106,7 +106,6 @@ int main(int, char**)
 
     // Our state
     ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
-
     /////////////////// OPALKELLY INIT //////////////////////
 
     std::chrono::time_point<std::chrono::high_resolution_clock> start, end, origin;
@@ -141,7 +140,7 @@ int main(int, char**)
     // Main loop
     while (!glfwWindowShouldClose(window) && done == 0)
     {
-        
+
         glfwPollEvents();
         // Start the Dear ImGui
 
@@ -151,7 +150,7 @@ int main(int, char**)
         ImGui_ImplGlfw_NewFrame();
         io.DeltaTime = 1.0f/60.0f;
         ImGui::NewFrame();
-        
+
         //ImPlot::ShowDemoWindow();
         //ImGui::ShowDemoWindow();
 
@@ -160,9 +159,9 @@ int main(int, char**)
         {
             UpdatedBiasData = ShowBiasControlCenter(&open_bias_control);
 
-            // If we haven't initialized the biases, we should initialized. 
-            // If we want to load from a file (which is handled in bias_control.cpp), we must also set all biases again. 
-            // This goes through the same logic as the initialization, for both analog biases and digital control. 
+            // If we haven't initialized the biases, we should initialized.
+            // If we want to load from a file (which is handled in bias_control.cpp), we must also set all biases again.
+            // This goes through the same logic as the initialization, for both analog biases and digital control.
             if (initialized_analog == false || BIASES_STRUCT.load_new_set_of_analog_biases == true)
             {
                 for (unsigned int i=0; i< N_BIASES; i++)
@@ -183,45 +182,47 @@ int main(int, char**)
                 cout << "Initialized Digital Control" << endl;
             }
 
-            // If change is detected in the analog or digital toggles/switches on the GUI, the "changed_bias/changed_control"  
+            // If change is detected in the analog or digital toggles/switches on the GUI, the "changed_bias/changed_control"
             // bools get updated on bias_control.cpp. We can then modify the biases/control individually.
             if (UpdatedBiasData.changed_analog_bias == true)
             {
                 dev.set_individual_bias(&biases, UpdatedBiasData.analog_bias_to_set, UpdatedBiasData.analog_new_val);
             }
-            
+
             if (UpdatedBiasData.changed_digital_control == true)
             {
                 cout << "Reading from: " << UpdatedBiasData.digital_read_pin << "--" << UpdatedBiasData.digital_write_pin << endl;
                 dev.toggle_wire(UpdatedBiasData.digital_read_pin, UpdatedBiasData.digital_write_pin);
             }
 
-            // If button "reset device" is clicked on the Bias Control center, reset_device return true, and we should reset 
+            // If button "reset device" is clicked on the Bias Control center, reset_device return true, and we should reset
             // the device.
             if (UpdatedBiasData.reset_device == true)
             {
                 dev.reset();
-                // Setting the following bools to false in order to initialize again at the next iteration. 
-                // The value of the biases will be the same as on the previous iteration. 
+                // Setting the following bools to false in order to initialize again at the next iteration.
+                // The value of the biases will be the same as on the previous iteration.
                 initialized_analog = false;
                 initialized_digital = false;
                 std::cout << "Device was reset! Bias and Digital controls will also be reset" << endl;
             }
         }
-        
+
         if (dev.is_opened && dev.ok())
         {
             ///// EVENT HANDLER /////
             start = std::chrono::high_resolution_clock::now();
-            
+
             // empty gaia_events when reset!
             if (UpdatedBiasData.reset_device == true)
             {
                 Visualizer.gaia_events.clear();
                 std::cout << UpdatedBiasData.reset_device << endl;
 
-            }    
+            }
             // Check input data, emptying buffer
+            // Standard impementation of event buffer
+
             /*while(ev_buffer.size() > 0)
             {
                 dev.ev_buffer_lock.lock();
@@ -230,45 +231,19 @@ int main(int, char**)
                 ev_buffer.pop();
                 dev.ev_buffer_lock.unlock();
             }*/
+            // Moved to ConcurrentQueue to avoid lock/unlock
             Event2d ev;
-
             while(ev_buffer.try_dequeue(ev))
             {
             Visualizer.gaia_events.push_back(ev);
             }
         }
 
-
-
         Visualizer.ShowGaiaVisualization(&open_live_visualization, UpdatedBiasData.reset_device);
 
        // if (open_replay_visualization == true)
        //     PlayGaiaVisualizationFromFile(&open_replay_visualization);
-   
-        /*
-         {
 
-            //ImGui::Begin("Custom plotting");
-            float offset = 500;
-            ImGui::Text("size = %d x %d", image_width, image_width);
-            const ImVec2 min = ImVec2(500.0f, 500.0f);
-            const ImVec2 max = ImVec2(50.0f, 10.0f);
-            const ImVec2 mid = ImVec2(10.0f, 500.0f);
-
-            ImDrawList* draw_list = ImGui::GetWindowDrawList();;
-           // draw_list->AddRectFilled(min, max, IM_COL32(64, 64, 64, 200));
-           // draw_list->AddCircle(min, 10., IM_COL32(90, 90, 120, 255));
-           // draw_list->AddTriangleFilled(min, max, mid,IM_COL32(90, 90, 120, 255));
-            draw_list ->AddRectFilled(ImVec2(500.0f, 200.0f), ImVec2(505.0f, 205.0f),IM_COL32(255, 0, 0, 100));
-            draw_list ->AddRectFilled(ImVec2(400.0f, 200.0f), ImVec2(405.0f, 205.0f),IM_COL32(255, 0, 0, 100));
-            draw_list ->AddRectFilled(ImVec2(400.0f, 200.0f), ImVec2(405.0f, 205.0f),IM_COL32(255, 0, 0, 100));
-            draw_list ->AddRectFilled(ImVec2(300.0f, 200.0f), ImVec2(305.0f, 205.0f),IM_COL32(0, 0, 255, 100));
-
-           // ImGui::End();
-            }*/
-        //// ADC VISUALIZATION 
-         // ShowAdcChannelGraphs();
-        
         // Rendering
         ImGui::Render();
         int display_w, display_h;

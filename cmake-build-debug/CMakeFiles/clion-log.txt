@@ -1,0 +1,1 @@
+CMakeLists.txt not found in /Users/matteo/Repositories/gaia-gui-interface Select CMakeLists.txt

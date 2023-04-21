@@ -4,8 +4,6 @@
 #include <fstream>
 #include <iostream>
 
-
-
 class Event2d {
 public:
     Event2d();
@@ -16,8 +14,6 @@ public:
     unsigned int p;
 };
 
-void WriteEvent(std::ofstream* of, Event2d ev);
-
 class EventRaw {
 public:
     EventRaw();
@@ -27,6 +23,8 @@ public:
     unsigned long long ts;
     unsigned short data;
 };
+
+void WriteEvent(std::ofstream* of, Event2d ev);
 
 // create buffer of events 
 //std::queue<Event2d> ev_buffer; // Events from FPGA

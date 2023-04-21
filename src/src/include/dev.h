@@ -2,7 +2,6 @@
 #define __DEV_H
 
 #include <sys/stat.h>
-
 #include <iostream>
 #include <fstream>
 #include "boost/thread.hpp"
@@ -10,15 +9,10 @@
 #include <thread>
 #include <queue>
 #include <sys/stat.h>
-
 #include "events.h"
 #include "bioamp_biases.h"
 #include "okFrontPanelDLL.h"
 #include "okFrontPanel.h"
-
-
-
-
 
 // Read and write digital endpoints 
 #define READ_C0       0x20

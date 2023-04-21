@@ -39,7 +39,6 @@
 
 using namespace std;
 
-
 long long first_ts;
 extern const int begin_time;
 
@@ -160,7 +159,6 @@ void Visualizer::create_event_vector(string path, int num_ev)
         {   cout <<  blacklist[i].x << " "<< blacklist[i].y <<endl;}
     }
 
-
     if (bg_noise)
     {
         cout << "Size of array before filter : " << loaded_gaia_events_all.size() << endl;
@@ -243,18 +241,6 @@ void Visualizer::ShowGaiaVisualization(bool* live_visualization_open, bool reset
     }
     ImPlot::PushColormap("Gaia Colormaps");
     float GAIAEvents[LEN_GAIAEVENTS] = {0};
-    /*for (int i = 0; i < LEN_GAIAEVENTS; i++){GAIAEvents[i] = 0;}
-    for (int i = 0; i < 10; i++){GAIAEvents[(74-0)*75 +i] = 1;}
-    for (int i = 0; i < 20; i++){ GAIAEvents[(74-6)*75 +i] = 2;}
-    for (int i = 1; i < 75; i++){GAIAEvents[(74-74)+i] = 3;}
-     for (int i = 100; i < 200; i++){GAIAEvents[i] = 1;}
-     for (int i = 300; i < 400; i++){GAIAEvents[i] = 1.5;}
-     for (int i = 600; i < 700; i++){GAIAEvents[i] = 2;}
-     for (int i = 800; i < 900; i++){GAIAEvents[i] = 3;}
-     for (int i = 1800; i < 1900; i++){GAIAEvents[i] = 3.5;}
-     for (int i = 1900; i < 2000; i++){GAIAEvents[i] = 4;}*/
-
-
     // ----- Time handling ---
     static auto start_time = std::chrono::high_resolution_clock::now();
     if (reset == true) {
@@ -263,7 +249,6 @@ void Visualizer::ShowGaiaVisualization(bool* live_visualization_open, bool reset
     auto current_time = std::chrono::high_resolution_clock::now();
     double elapsed_time_since_start =
             std::chrono::duration<double, std::milli>(current_time - start_time).count() / 1000;
-
     // Global Helper variables
     fps = 1 / ImGui::GetIO().DeltaTime;
 
