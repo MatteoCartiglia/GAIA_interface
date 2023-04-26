@@ -24,11 +24,14 @@
 #include "../src/include/bioamp_biases.h"
 #include "../src/concurrentqueue.h"
 
+#include "../src/include/Filters.h"
+
 #include "../src/include/dev.h"
 #include "../src/data/events.cpp"
 #include "../src/data/dev.cpp"
 #include "../src/data/bias_control.cpp"
 #include "../src/visualization/visualizer.cpp"
+
 //#include "../src/visualization/visualize_adc_channel.cpp"
 
 # define overflow_event_time_equivalent 65535.0f * sampling_frequency;
@@ -233,13 +236,13 @@ int main(int, char**)
             }*/
             // Moved to ConcurrentQueue to avoid lock/unlock
             Event2d ev;
-            while(ev_buffer.try_dequeue(ev))
+            while(ev_buffer.try_dequeue(ev)&& Visualizer.isLive)
             {
             Visualizer.gaia_events.push_back(ev);
             }
         }
-
-        Visualizer.ShowGaiaVisualization(&open_live_visualization, UpdatedBiasData.reset_device);
+        Visualizer.renderEvents(&open_live_visualization, UpdatedBiasData.reset_device, dev.fifo_full);
+//Visualizer.ShowGaiaVisualization(&open_live_visualization, UpdatedBiasData.reset_device);
 
        // if (open_replay_visualization == true)
        //     PlayGaiaVisualizationFromFile(&open_replay_visualization);

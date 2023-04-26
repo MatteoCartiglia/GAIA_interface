@@ -51,6 +51,7 @@ SOURCES +=  $(SOURCE_DIR)/main.cpp \
 			$(IMPLOT_DIR)/implot_demo.cpp \
 			$(BACKENDS_DIR)/imgui_impl_opengl3.cpp \
 			$(BACKENDS_DIR)/imgui_impl_glfw.cpp \
+			$(IMGUI_DIR)/ImGuiFileDialog.cpp \
 			# $(SOURCE_DATA_DIR)/bioamp.cpp \
 			$(SOURCE_DATA_DIR)/events.cpp \
 			$(SOURCE_DATA_DIR)/bias_control.cpp \
