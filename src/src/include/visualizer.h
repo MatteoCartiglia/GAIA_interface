@@ -2,82 +2,102 @@
 #define VISUALIZER_H
 
 # define sampling_frequency 1e-5
-# define LEN_GAIAEVENTS 5625
 
-class Visualizer{
-    public:
 
-        int slow_down =1;
-        bool record;
-        double fps;
-        float tmp1= 0, tmp2=0;
-        std::string default_filename = "Recordings/tmp.dat";
-        std::ofstream* ofs;
 
-        std::vector<int> index_time_bin;
-        std::vector<Event2d> gaia_events;
-        std::vector<Event2d> loaded_gaia_events;
-        std::vector<Event2d> loaded_gaia_events_all;
-        std::vector<Event2d> single_events_plots;
-    Visualizer ();
-        ~Visualizer ();
+struct pixel_click{
+    int x;
+    int y;
+};
 
-        void ShowGaiaVisualization(bool* live_visualization_open, bool reset);
-        void create_event_vector(std::string path,  int num_ev);
-        void write_dummy_data();
-        void copy_events(std::string old_path, std::string new_path);
-        void populate_index_time_bin(int itorator);
-        void WriteEvent(std::ofstream* of, Event2d ev);
-        void enable_record(bool state);
-        void enable_save_processed_data(bool state);
+class Visualizer {
+public:
+    Visualizer();
+    ~Visualizer ();
+    void renderEvents(bool* live_visualization_open, bool reset, bool fifo_full);
+    void processEvents(std::vector<Event2d>& input_events, uint8_t filter_map);
+    pixel_click onMouseClick(int mouse_x, int mouse_y);
+    void handleMouseClick();
+    bool checkFifoFull(bool fifo_full);
 
-    float distance_calculator(Event2d p1,Event2d p2 );
-        void background_filter(  );
-        void hot_pixel_filter(  );
+    void enableRecord(bool state);
+    void writeEvent(std::ofstream* of, const Event2d& ev);
+    void recordingInitializer();
+    void recordingFinisher();
+    void showSavingPopup(const std::string& filename);
+
+
+    void filePicker();
+    void loadEvents(const std::string& filename);
+    void filterEventsByTimestamp();
+    void updateEventTimeframe();
+    void handlePlayback();
+    void handlePrevFrame();
+    void handleNextFrame();
+
+
+    void removeTsOffset();
+    void updateGaiaEvents();
+    void sortEvents();
+
+    void displaySelectedHotPixels();
+    void visualizeSelectedHotPixels();
+
+
+    void drawHeatmap();
+    std::vector<Event2d> eventstoDraw, gaia_events, gaia_loaded_events;
+
+    double fps;
+    bool isLive = true;
+
+
+private:
+    void popIncomingEvents();
+
+    float circle_diameter = 10;
+    int pixels_X_offset= 150;
+    int pixels_Y_offset = 300;
+    uint16_t filter_map;
+
+    bool recording_active = false;
+    bool coincidence_active = false;
+    bool hotpixel_active = false;
+    bool AP_filter_Active = false;
+
+    int64_t current_timestamp = 0;
+
+    void drawCanvas(bool* live_visualization_open);
+
+    RecordingFilter* recording_filter;
+    bool prev_recording_active = false;
+    std::string filename = "tmp.dat";
+    std::string loading_filename;
+
+    bool show_rename_popup = false;
+    bool show_file_picker = false;
+
+    std::chrono::duration<double> frame_interval;
+    std::chrono::high_resolution_clock::time_point prev_frame_time, current_frame_time;
+    uint64_t start_timestamp = 0;
+    float time_scale = 1.0f;
+    int itorator;
+    uint64_t start_ts, end_ts;
+    int buffer_time;
+    bool isPlayback = false;
+
+    bool playback_paused = false;
+    bool nextFrame = false;
+    bool prevFrame = false;
+
+    HotPixelFilter hotPixel_Filter;
+    CoincidenceFilter CoincidenceFilter;
+    APFilter APFilter;
+
+    HeatmapFilter heatmap_filter;
+    bool show_heatmap_window = true;
+    bool heatmap_active=true;
 
 };
-    float distance_cutoff= 2;
-    float time_cutoff = 0.001;
-    int num_ev = -1;
-    int index_time_plot=-1;
-    int itorator =0;
-    bool playback = false;
-    bool live = true;
-    bool pause_replay = false;
-    bool stop_replay = false;
-    bool next_replay = false;
-    bool prev_replay = false;
-    bool bg_noise = false;
-    bool heatmap_plot = false;
-    bool heatmap_on_ev = true;
-    bool heatmap_off_ev = true;
-    bool event_trace_plot = false;
-    std::vector<int> X_plot ;
-    std::vector<int>  Y_plot;
-    std::vector<Event2d> foundElements;
-    float tot_time_plot;
-    float interval_time = 0.001;
-    std::vector<float> plt_ev;
-    std::vector<float> plt_time;
-    bool save_img = false;
-    bool save_processed_data = false;
-
-    bool hot_pixels =false;
-    std::vector<Event2d> blacklist;
-
-
-
-float new_X_plot, new_Y_plot,rm_X_plot,rm_Y_plot;
-    bool add_plot= false, add_plot_all=false;
-    bool rm_plot= false, rm_plot_all=false;
-
-// Visualizatin parameters
-    float colormap_baseline_color = 0;
-    float colormap_on_color_lowbound = 1;
-    float colormap_on_color_upbound = 2;
-    float colormap_off_color_lowbound = 3;
-    float colormap_off_color_upbound = 4;
-    float dummycolor=5;
 
 
 #endif

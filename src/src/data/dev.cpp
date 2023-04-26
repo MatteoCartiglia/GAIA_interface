@@ -193,7 +193,7 @@ bool Dev::read(moodycamel::ConcurrentQueue<Event2d>* ev_buffer)
     dev->UpdateWireOuts();
     data_count = dev->GetWireOutValue(READ_fifo_count);
     //std::cout << "data_count: "<< data_count <<std::endl;
-    uint32_t fifo_full = dev->GetWireOutValue(READ_fifo_full);
+    fifo_full = dev->GetWireOutValue(READ_fifo_full);
 
   if (false == exitOnError((okCFrontPanel::ErrorCode)ret))
   {
@@ -209,7 +209,7 @@ bool Dev::read(moodycamel::ConcurrentQueue<Event2d>* ev_buffer)
   {
     return(true);
   }
-  for (unsigned int k = 0 ; k < (data_count*4)/BLOCK_SIZE ; k++) {
+    for (unsigned int k = 0 ; k < (data_count*4)/BLOCK_SIZE ; k++) {
 
        ret = dev->ReadFromBlockPipeOut(READ_ADDR, BLOCK_SIZE, BLOCK_SIZE, &g_rbuf[0]);
        //std::cout << "ret: "<< ret << std::endl;
@@ -227,7 +227,7 @@ bool Dev::read(moodycamel::ConcurrentQueue<Event2d>* ev_buffer)
             
           // unsigned short timestamp = g_rbuf[4 * i + 2] + (g_rbuf[4 * i + 3] << 8);
           // unsigned short data = g_rbuf[4 * i] + (g_rbuf[4 * i + 1] << 8);
-         //  std::cout << "ts: " << timestamp << std::endl;
+         // std::cout << "ts: " << timestamp << std::endl;
 
            if (data == OF_CODE && timestamp == OF_CODE) {
                of_counter++;
@@ -300,6 +300,17 @@ bool Dev::read(moodycamel::ConcurrentQueue<Event2d>* ev_buffer)
 
 }
 
+void Dev::listen(moodycamel::ConcurrentQueue<Event2d>* ev_buffer) {
+    while (is_listening) {
+        read(ev_buffer);
+        std::this_thread::sleep_for(std::chrono::milliseconds(READ_DELAY));
+    }
+}
+void Dev::join_thread(moodycamel::ConcurrentQueue<Event2d>* ev_buffer) {
+    is_listening = true;
+    listener = std::thread([this, ev_buffer] { listen(ev_buffer); });
+}
+
 
 /*
 void Dev::listen(std::queue<Event2d>* ev_buffer) {
@@ -310,12 +321,7 @@ void Dev::listen(std::queue<Event2d>* ev_buffer) {
 }
 */
 
-void Dev::listen(moodycamel::ConcurrentQueue<Event2d>* ev_buffer) {
-    while (is_listening) {
-        read(ev_buffer);
-        std::this_thread::sleep_for(std::chrono::milliseconds(READ_DELAY));
-    }
-}
+
 
 /*
 void Dev::join_thread(std::queue<Event2d>* ev_buffer) {
@@ -323,10 +329,6 @@ void Dev::join_thread(std::queue<Event2d>* ev_buffer) {
   listener = std::thread([this, ev_buffer]{listen(ev_buffer);});
 }
 */
-void Dev::join_thread(moodycamel::ConcurrentQueue<Event2d>* ev_buffer) {
-    is_listening = true;
-    listener = std::thread([this, ev_buffer] { listen(ev_buffer); });
-}
 
 bool Dev::ok() {
     return dev->IsOpen();

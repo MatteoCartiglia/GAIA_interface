@@ -1,5 +1,8 @@
 #include "../../imgui/imgui_backend/imgui_impl_glfw.h"
 #include "../../imgui/imgui_backend/imgui_impl_opengl3.h"
+#include "../../imgui/ImGuiFileDialog.h"
+#include "../../imgui/Implot.h"
+
 #include <stdio.h>
 #include <stack>         
 #include <iostream>
@@ -37,700 +40,494 @@
 #include "../include/visualizer.h"
 #include "../include/dev.h"
 
+#include "../include/Filters.h"
+#include "../visualization/Filters.cpp"
+
 using namespace std;
 
 long long first_ts;
 extern const int begin_time;
+Visualizer::Visualizer() : recording_filter(nullptr),  heatmap_filter(75, 75){
+    prev_frame_time = std::chrono::high_resolution_clock::now();
 
-Visualizer::Visualizer(){}
-Visualizer::~Visualizer(){}
-
-void Visualizer::write_dummy_data()
-{
-    std::ofstream* of;
-
-    of = new std::ofstream( "dummy.dat", std::ofstream::out | std::ofstream::binary);
-    if (of->is_open())
-    {
-        // two of the last one
-        Event2d evs = Event2d(100000,1,1,1);
-        WriteEvent(of, evs);
-
-        Event2d ev = Event2d(100000,2,2,1);
-        WriteEvent(of, ev);
-
-        evs = Event2d(200000,1,1,1);
-        WriteEvent(of, evs);
-
-        ev = Event2d(200000,2,2,1);
-        WriteEvent(of, ev);
-
-        evs = Event2d(300000,1,1,1);
-        WriteEvent(of, evs);
-
-        std::cout << "ev len: "<< sizeof (evs) << std::endl;
-        of->close();
+}
+Visualizer::~Visualizer(){
+    if (recording_filter != nullptr) {
+        delete recording_filter;
     }
 }
 
-void Visualizer::enable_record(bool state) {
-    if(state == true) 
-    {
-        ofs = new std::ofstream(default_filename, std::ofstream::out | std::ofstream::binary);
-        if (ofs->is_open())
-        {
-          std::cout << "Streaming file is open \n" << std::endl;
+
+void Visualizer::renderEvents(bool* live_visualization_open, bool reset, bool fifo_full) {
+        ImGui::Begin("GAIA Live Visualization board", live_visualization_open);
+        // time handling varibale
+        current_frame_time = std::chrono::high_resolution_clock::now();
+        frame_interval = current_frame_time - prev_frame_time;
+        prev_frame_time = current_frame_time;
+        fps =1 / ImGui::GetIO().DeltaTime;
+
+    // Create checkboxes for filter activation states
+        ImGui::Checkbox("Hotpixel Filter", &hotpixel_active);
+        displaySelectedHotPixels();
+        ImGui::Checkbox("Coincidence Filter", &coincidence_active);
+        if(coincidence_active){AP_filter_Active = false;}
+        ImGui::SameLine();
+        ImGui::Checkbox("AP Filter", &AP_filter_Active);
+        if(AP_filter_Active){coincidence_active = false;}
+        ImGui::InputFloat("Coinc Distance cutoff: ", &CoincidenceFilter.distance_cutoff);
+        ImGui::InputFloat("Coinc Time cutoff [in ms]: ", &CoincidenceFilter.time_cutoff, 0.000001, 1, "%06f");
+        ImGui::InputFloat("AP Distance cutoff: ", &APFilter.distance_cutoff);
+        ImGui::InputFloat("AP Time cutoff [in ms]: ", &APFilter.time_cutoff, 0.000001, 1, "%06f");
+        ImGui::Checkbox("Recording Filter", &recording_active);
+        ImGui::SameLine();
+        ImGui::Checkbox("Live Mode", &isLive);
+        ImGui::SameLine();
+        ImGui::Checkbox("Playback Mode", &isPlayback);
+        ImGui::SameLine();
+        ImGui::Checkbox("Heatmap", &heatmap_active);
+        ImGui::SameLine();
+        ImGui::Checkbox("Pause ", &playback_paused);
+        ImGui::SameLine();
+        ImGui::Checkbox("Next Frame ", &nextFrame);
+        ImGui::SameLine();
+        ImGui::Checkbox("Previous Frame ", &prevFrame);
+        ImGui::Text("Time Scale");
+        ImGui::SameLine();
+        ImGui::SliderFloat("##Time Scale", &time_scale, 0.0001f, 1.0f, "%.4f");
+        ImGui::SameLine();
+        ImGui::Text("0.03 for 500us intervals");
+        float frame_duration = time_scale / (fps * sampling_frequency);
+        ImGui::Text("Frame Duration: %.3f microseconds", frame_duration*10);
+
+
+    filter_map = (hotpixel_active << Hotpixel) |
+                (coincidence_active << Coincidence) |
+                (recording_active << Recording);
+
+
+
+        processEvents(gaia_events, filter_map);
+
+        showSavingPopup(filename);
+        filePicker();
+        handleMouseClick();
+
+        // Get the current window draw list
+        ImVec2 top_left_corner(pixels_X_offset, pixels_Y_offset);
+        ImVec2 bottom_right_corner(pixels_X_offset + 75 * circle_diameter, pixels_Y_offset + 75 * circle_diameter);
+        ImU32 rectangle_color = ImColor(255, 255, 255,50); // White
+        ImGui::GetWindowDrawList()->AddRect(top_left_corner, bottom_right_corner, rectangle_color);
+
+
+    // Check if fifo_full is asserted
+    if (checkFifoFull(fifo_full)) {
+        ImVec2 center(ImGui::GetWindowSize().x / 2, ImGui::GetWindowSize().y / 2);
+        ImU32 color = ImColor(0, 0, 255); // Blue
+        ImGui::GetWindowDrawList()->AddCircleFilled(center, circle_diameter / 2.0f, color);
+    }
+    else {
+        // Draw the canvas
+        visualizeSelectedHotPixels();
+        drawCanvas(live_visualization_open);
+    }
+        ImGui::End();
+}
+void Visualizer::visualizeSelectedHotPixels() {
+
+    if (hotpixel_active) {
+        const auto &hot_pixels = hotPixel_Filter.getSelectedHotPixels();
+        ImU32 hot_pixel_color = ImColor(128, 128, 128, 200); // Grey
+        for (const auto &pixel: hot_pixels) {
+            ImVec2 hot_pixel_top_left(pixel.first * circle_diameter + pixels_X_offset,
+                                      pixel.second * circle_diameter + pixels_Y_offset);
+            ImVec2 hot_pixel_bottom_right(hot_pixel_top_left.x + circle_diameter,
+                                          hot_pixel_top_left.y + circle_diameter);
+            ImGui::GetWindowDrawList()->AddRectFilled(hot_pixel_top_left, hot_pixel_bottom_right, hot_pixel_color);
         }
     }
-    else
-    {
-        ofs->close();
-        std::cout << "Streaming file is closed \n" << std::endl;
-    }
-    record = state;
 }
 
-void Visualizer::WriteEvent(std::ofstream* of, Event2d ev)
-{
-    of->write( reinterpret_cast<const char*>(&ev), sizeof(ev) ) ;
-    //std::chrono::time_point<std::chrono::high_resolution_clock>  time_before_read = std::chrono::high_resolution_clock::now();
 
-    //of->write( reinterpret_cast<const char*>(&(int)time_before_read), sizeof(int) ) ;
+void Visualizer::displaySelectedHotPixels() {
+    if (hotpixel_active) {
+        ImGui::SameLine();
+        const auto& hot_pixels = hotPixel_Filter.getSelectedHotPixels();
+        // Print hot pixels on screen
+        ImGui::Text("Selected Hot Pixels:");
 
-}
-
-void Visualizer::copy_events(string old_path, string new_path )
-{
-    std::ifstream old_file;
-    old_file.open ( old_path, std::ios::in | std::ios::binary);
-    std::ofstream* new_file  = new std::ofstream(new_path, std::ofstream::out | std::ofstream::binary);
-
-    if (old_file.is_open() && new_file->is_open())  
-    {
-        Event2d ev; 
-        while (old_file.good())
-        {
-            old_file.read((char *)&ev, sizeof(ev));
-            WriteEvent(new_file, ev);
-        }
-        cout << "Copied events "<< endl;
-        old_file.close();    
-        new_file->close();  
-    }
-}
-
-void Visualizer::create_event_vector(string path, int num_ev)
-{
-    std::cout << "Loading events  \n"<< std::endl;
-
-    loaded_gaia_events.clear();
-    loaded_gaia_events_all.clear();
-    std::ifstream listStream1;
-    listStream1.open ( path, std::ios::in | std::ios::binary);
-
-    int loaded_ev =0;
-    if (listStream1.is_open())  {
-        std::cout << "Opened:  \n"<< std::endl;
-        Event2d ev; 
-        while (listStream1.good())
-        {
-            listStream1.read((char *)&ev, sizeof(ev));
-            //std::cout << "p: "<< ev.p<< " x: "<< ev.x<< " y: "<< ev.y<< " ts: "<<  ev.ts << "\n"<< std::endl;
-            if (bg_noise){
-                loaded_gaia_events_all.push_back(ev);
+        int counter = 0;
+        for (const auto& pixel : hot_pixels) {
+            if (counter % 8 == 0 && counter != 0) {
+                ImGui::NewLine();
             }
-            else {   loaded_gaia_events.push_back(ev);}
-
-            loaded_ev++;
-            if (loaded_ev > num_ev & num_ev != -1)
-            {
-                break;
-            }
+            ImGui::SameLine();
+            ImGui::Text("X-Y: %d-%d ", pixel.first, pixel.second);
+            counter++;
         }
-        //cout << "Loaded events: " << loaded_gaia_events.size() << endl;
-        listStream1.close();      
     }
+}
+
+
+void Visualizer::filePicker() {
+    if (ImGui::Button("Load Events")) {
+        isLive=false;
+        show_file_picker = true;
+        ImGuiFileDialog::Instance()->OpenDialog("ChooseFileDlgKey", "Choose File", ".dat,.cpp,.h,.hpp",
+                                                ".",1);
+    }
+        if (ImGuiFileDialog::Instance()->Display("ChooseFileDlgKey")) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                std::string filePathName = ImGuiFileDialog::Instance()->GetFilePathName();
+                loadEvents(filePathName);
+                std::cout << filePathName << std::endl;
+            }
+            ImGuiFileDialog::Instance()->Close();
+            show_file_picker = false;
+
+        }
+
+}
+
+void Visualizer::loadEvents(const std::string& filename) {
+    std::ifstream file(filename, std::ifstream::binary);
+    Event2d ev;
+
+    gaia_loaded_events.clear();
+
+    while (file.good()) {
+        file.read((char *)&ev, sizeof(ev));
+        gaia_loaded_events.push_back(ev);
+
+    }
+    file.close();
+
+    std::cout << "Loaded event : " << gaia_loaded_events.size() << std::endl;
+
+    //  All processing that needs to happen on loaded events.
     itorator = 0;
+    removeTsOffset();
+    isPlayback = true;
+    sortEvents();
+    std::cout << "Loaded event after sorting: " << gaia_loaded_events.size() << std::endl;
 
-    if (hot_pixels) {
-        hot_pixel_filter();
-        cout << "Blacklist pixels: "<<endl;
-        for (int i=0;i<blacklist.size();i++)
-        {   cout <<  blacklist[i].x << " "<< blacklist[i].y <<endl;}
+    if( hotpixel_active) {
+        hotPixel_Filter.process(gaia_loaded_events);
+    }
+    std::cout << "Loaded event af hotpix: " << gaia_loaded_events.size() << std::endl;
+
+    if (coincidence_active) {
+        CoincidenceFilter.processing(gaia_loaded_events);
+    }
+    if (AP_filter_Active) {
+        APFilter.processing(gaia_loaded_events);
+    }
+    std::cout << "Loaded event af coincidence: " << gaia_loaded_events.size() << std::endl;
+
+    if(heatmap_active){
+        heatmap_filter.process(gaia_loaded_events);
+        heatmap_filter.calculateEventCounts(gaia_loaded_events, 100);
     }
 
-    if (bg_noise)
-    {
-        cout << "Size of array before filter : " << loaded_gaia_events_all.size() << endl;
-        background_filter();
-        cout << "done filtering "<<endl;
+}
+
+void Visualizer::filterEventsByTimestamp(){
+//    std::cout<< "Dim gaia_loaded_events " << gaia_loaded_events.size() << std::endl;
+//    std::cout<< "First ts " << gaia_loaded_events.begin()->ts << std::endl;
+//    std::cout<< "Last ts " << gaia_loaded_events.end()->ts << std::endl;
+//    std::cout<< "ts slice start: " << start_ts << std::endl;
+
+    // 10 frames as buffer
+    buffer_time = start_ts - (end_ts - start_ts)*4;
+    if (buffer_time<0) {
+        buffer_time = 0;
     }
-
-
-    if (loaded_gaia_events.size()>0) {
-        cout << "Size of array : " << loaded_gaia_events.size() << endl;
+    int ind=0;
+    for (int i = 0; i < gaia_loaded_events.size(); i++) {
+        if (gaia_loaded_events[i].ts <= (buffer_time)) {
+            gaia_loaded_events.erase(gaia_loaded_events.begin() + ind);
+            ind++;
+        } else { break; }
     }
-    else{// dummy event so it doesnt crash
-        cout << "No events passing the filters! " << endl;
-        loaded_gaia_events.push_back(Event2d( 0,0,0,0));
-    }
-    foundElements.clear();
-    if (event_trace_plot){
-        foundElements[sizeof(loaded_gaia_events)];
-        auto it = std::copy_if(loaded_gaia_events.begin(), loaded_gaia_events.end(), back_inserter(foundElements), [&](const Event2d& ev) {
-            return std::find(std::begin(X_plot), std::end(X_plot), ev.x) != std::end(X_plot)
-                   && std::find(std::begin(Y_plot), std::end(Y_plot), ev.y) != std::end(Y_plot);
-        });
-        int size = foundElements.size();
-        if (size) {
-            std::cout << "Size of array from selected pixels :" << " " << size<< std::endl;
-           // std::cout << "Elements found: " << std::endl;
-            for (int i = 0; i < size; i++) {
-              //  std::cout << "X, Y, Ts: " << foundElements[i].x << " " << foundElements[i].y << " " << foundElements[i].ts <<std::endl;
-            }
-        } else {
-            std::cout << "No Elements found" << std::endl;
-        }
-
-        if (size){
-            tot_time_plot = (foundElements.back().ts -  foundElements.front().ts)*sampling_frequency; // in sec
-            int number_time_bins= ceil(tot_time_plot/interval_time);
-            plt_time.clear();
-            plt_ev.clear();
-            plt_time.shrink_to_fit();
-            plt_ev.shrink_to_fit();
-
-            cout << "tot_time_plot: " << tot_time_plot <<endl;
-            cout << "number_time_bins: " << number_time_bins <<endl;
-
-            for(int i=0; i<number_time_bins;i++) {
-                plt_time.push_back(i * interval_time);
-            }
-            cout << "len plt_time " << plt_time.size()<< endl;
-
-            plt_ev.resize(plt_time.size());
-            std::fill(plt_ev.begin(), plt_ev.end(), 0);
-
-            for (int i=0; i<foundElements.size(); i++)
-            {
-                int n = floor (( (foundElements[i].ts - foundElements.front().ts)*sampling_frequency )/ ( interval_time));
-                plt_ev[n]++;
-            }
-
-           // for (int i=0 ; i <plt_ev.size();i++ ){cout <<"ev: " <<plt_ev[i] << "time: "<< plt_time[i] <<endl;}
-        }
+    if (gaia_loaded_events.empty()){
+        std::cout << "Out of events!!" << std::endl;
+        isPlayback = false;
+        isLive = false;
     }
 }
-void Visualizer::ShowGaiaVisualization(bool* live_visualization_open, bool reset) {
-    ImGui::Begin("GAIA Live Visualization board", live_visualization_open);
 
-    static ImPlotColormap GAIA_Colormaps = -1;
-    if (GAIA_Colormaps == -1) {
-        std::cout << "Creating colormap" << std::endl;
-        //
-        ImU32 Gaia_Colormap_Data[6] = {ImColor(255, 255, 255, 255),
-                                       ImColor(0, 150, 0, 255),
-                                       ImColor(0, 255, 0, 255),
-                                       ImColor(150, 0, 0, 255),
-                                       ImColor(255, 0, 0, 255),
-                                       ImColor(255, 255, 0, 255),
-
-        };
-
-        GAIA_Colormaps = ImPlot::AddColormap("Gaia Colormaps", Gaia_Colormap_Data, 6, false);
+void Visualizer::updateEventTimeframe() {
+    if (playback_paused && nextFrame) {
+        handleNextFrame();
+    } else if (playback_paused&& prevFrame) {
+        handlePrevFrame();
+    } else if (playback_paused) {
+        updateGaiaEvents();
+    } else if (!playback_paused && isPlayback) {
+        handlePlayback();
     }
-    ImPlot::PushColormap("Gaia Colormaps");
-    float GAIAEvents[LEN_GAIAEVENTS] = {0};
-    // ----- Time handling ---
-    static auto start_time = std::chrono::high_resolution_clock::now();
-    if (reset == true) {
-        start_time = std::chrono::high_resolution_clock::now();
+}
+
+void Visualizer::handleNextFrame() {
+    start_ts = end_ts;
+    end_ts = start_ts + ((1. / fps) * time_scale) * 1 / sampling_frequency;
+    playback_paused = true;
+    updateGaiaEvents();
+    nextFrame = false;
+}
+
+void Visualizer::handlePrevFrame() {
+    end_ts = start_ts;
+    start_ts = end_ts - 2 * ((1. / fps) * time_scale) * 1 / sampling_frequency;
+    playback_paused = true;
+    updateGaiaEvents();
+    prevFrame = false;
+}
+
+void Visualizer::handlePlayback() {
+    if (itorator == 0) {
+        start_ts = 0;
+        end_ts = start_ts + ((1. / fps) * time_scale) * 1 / sampling_frequency;
+    } else {
+        start_ts = end_ts;
+        end_ts = start_ts + ((1. / fps) * time_scale) * 1 / sampling_frequency;
     }
-    auto current_time = std::chrono::high_resolution_clock::now();
-    double elapsed_time_since_start =
-            std::chrono::duration<double, std::milli>(current_time - start_time).count() / 1000;
-    // Global Helper variables
-    fps = 1 / ImGui::GetIO().DeltaTime;
+    itorator++;
+    updateGaiaEvents();
+    filterEventsByTimestamp();
+}
 
-    // -------- Print interesting facts --- 
-    ImGui::BulletText("Current FPS: %f", (fps));
-    ImGui::BulletText("Elapsed time since beginning of plot: %i s", int(elapsed_time_since_start));
-    //ImGui::BulletText("Event rate: %i ", (gaia_events.size()+loaded_gaia_events.size()));
-    //ImGui::BulletText("Fifo usage : %i ", (data_count));
-    ImGui::BulletText("Event time: %f ", tmp2);
-    ImGui::BulletText("Delta time: %f ", tmp2 - tmp1);
-
-    //ImGui::BulletText("Incoming number of events: %i ", int(event_counter));
-
-
-    ImGui::InputInt("Number of events to show: ", &num_ev);
-
-    if (ImGui::Button("Load Events"))
-        ImGui::OpenPopup("Loading Events");
-
-    if (ImGui::BeginPopupModal("Loading Events", NULL, ImGuiWindowFlags_MenuBar)) {
-        ImGui::Text("Choose a your favourite set of events... ");
-        std::string path = "Recordings/";
-        int n_files = 0;
-        for (const auto &dirEntry: fs::directory_iterator(path)) {
-            string filename_with_path = dirEntry.path();
-            n_files = n_files + 1;
+void Visualizer::updateGaiaEvents() {
+    for (int i = 0; i < gaia_loaded_events.size(); i++) {
+        if (gaia_loaded_events[i].ts > start_ts && gaia_loaded_events[i].ts <= end_ts) {
+            gaia_events.push_back(gaia_loaded_events[i]);
         }
-        char *filenames_no_path[n_files];
-        char *filenames_with_path[n_files];
-        int iter = 0;
-        for (const auto &dirEntry: fs::directory_iterator(path)) {
-            string filename_with_path = dirEntry.path();
-            string filename_no_path = filename_with_path.substr(filename_with_path.find('/') + 1,
-                                                                filename_with_path.length() -
-                                                                filename_with_path.find('/'));
-
-            filenames_with_path[iter] = new char[filename_with_path.length() + 1];
-            strcpy(filenames_with_path[iter], filename_with_path.c_str());
-
-            filenames_no_path[iter] = new char[filename_no_path.length() + 1];
-            strcpy(filenames_no_path[iter], filename_no_path.c_str());
-            iter++;
-        }
-        for (int i = 0; i < n_files; i++) {
-            if (i % 3 != 0)
-                ImGui::SameLine();
-            ImGui::PushID(i);
-            ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4) ImColor::HSV(4 / 7.0f, 0.6f, 0.6f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4) ImColor::HSV(4 / 7.0f, 0.7f, 0.7f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4) ImColor::HSV(4 / 7.0f, 0.8f, 0.8f));
-            if (ImGui::Button(filenames_no_path[i])) {
-                create_event_vector(filenames_with_path[i], num_ev);
-                playback = true;
-                live = false;
-                tmp1, tmp2 = 0;
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::PopStyleColor(3);
-            ImGui::PopID();
-        }
-        ImGui::PushID(0);
-        ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4) ImColor::HSV(0 / 7.0f, 0.6f, 0.6f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4) ImColor::HSV(0 / 7.0f, 0.7f, 0.7f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4) ImColor::HSV(0 / 7.0f, 0.8f, 0.8f));
-        bool close_button = false;
-        close_button = ImGui::Button("Close");
-        ImGui::PopStyleColor(3);
-        ImGui::PopID();
-        if (close_button)
-            ImGui::CloseCurrentPopup();
-        ImGui::EndPopup();
+        else if (gaia_loaded_events[i].ts > end_ts){break;}
     }
+}
 
-    ImGui::PushItemWidth(ImGui::GetWindowWidth() * 0.1);
-    ImGui::Checkbox("Stop", &stop_replay);
-    ImGui::SameLine();
-    ImGui::Checkbox("Pause", &pause_replay);
-    ImGui::SameLine();
-    ImGui::Checkbox("Next", &next_replay);
-    ImGui::NewLine();
-    ImGui::Checkbox("Background Noise", &bg_noise);
-    ImGui::SameLine();
-    ImGui::InputFloat("Distance cutoff: ", &distance_cutoff);
-    ImGui::SameLine();
-    ImGui::InputFloat("Time cutoff: ", &time_cutoff, 0.000001, 0.0001, "%06f");
-    ImGui::NewLine();
-    ImGui::Checkbox("Plot heatmap", &heatmap_plot);
-    ImGui::SameLine();
-    ImGui::Checkbox("ON events: ", &heatmap_on_ev);
-    ImGui::SameLine();
-    ImGui::Checkbox("OFF events: ", &heatmap_off_ev);
-    ImGui::SameLine();
-    ImGui::Checkbox("Hot pixels: ", &hot_pixels);
-    ImGui::NewLine();
-    ImGui::Text("Blacklist: ");
-    for (int i = 0; i < blacklist.size(); i++) {
-        ImGui::SameLine();
-        ImGui::Text("%i-%i ", blacklist[i].x, blacklist[i].y);
+
+void Visualizer::removeTsOffset() {
+    if (gaia_loaded_events.empty()) {
+        return;
     }
-    ImGui::NewLine();
-    ImGui::Checkbox("Event trace: ", &event_trace_plot);
-    ImGui::SameLine();
-    ImGui::SliderInt("Slow Down", &slow_down, 1, 20, " %.6f x");
-    ImGui::SameLine();
-    ImGui::Checkbox("Live", &live);
-    ImGui::SameLine();
-    ImGui::Checkbox("Playback", &playback);
-    ImGui::SameLine();
-    ImGui::Checkbox("Recording", &record);
-
-    ImGui::NewLine();
-
-    if (ImGui::Button("Save processed data"))
-    {
-        ofs = new std::ofstream(default_filename, std::ofstream::out | std::ofstream::binary);
-        if (ofs->is_open()) {
-            std::cout << "Saving \n" << std::endl;
-        }
-        for (int i = 0; i < loaded_gaia_events.size(); i++) {
-            WriteEvent(ofs, loaded_gaia_events[i]);
-        }
-        cout << "logged all data: " << loaded_gaia_events.size() << endl;
-        ofs->close();
-
-        ImGui::OpenPopup("Save Processed Events");
+    uint64_t first_timestamp = gaia_loaded_events[0].ts;
+    for (Event2d& event : gaia_loaded_events) {
+        event.ts -= first_timestamp;
     }
+}
+void Visualizer::drawHeatmap() {
 
-    if (ImGui::BeginPopupModal("Save Processed Events", NULL, ImGuiWindowFlags_MenuBar))
-    {
-        ImGui::Text("Name the file... ");
-        static char filename[128] = "Recordings/1901_CM_electrodestimulation/__NAME__.dat";
-        ImGui::InputText(" ", filename, IM_ARRAYSIZE(filename));
-        ImGui::SameLine();
-        ImGui::PushID(0);
-        ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4) ImColor::HSV(3 / 7.0f, 0.6f, 0.6f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4) ImColor::HSV(3 / 7.0f, 0.7f, 0.7f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4) ImColor::HSV(3 / 7.0f, 0.8f, 0.8f));
-        bool save_button = false;
-        save_button = ImGui::Button("Save");
-        ImGui::PopStyleColor(3);
-        ImGui::PopID();
-        if (save_button) {
-            copy_events(default_filename, filename);
-        }
-        ImGui::PushID(0);
-        ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4) ImColor::HSV(0 / 7.0f, 0.6f, 0.6f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4) ImColor::HSV(0 / 7.0f, 0.7f, 0.7f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4) ImColor::HSV(0 / 7.0f, 0.8f, 0.8f));
-        bool close_button = false;
-        close_button = ImGui::Button("Close");
-        ImGui::PopStyleColor(3);
-        ImGui::PopID();
-        if (close_button)
-            ImGui::CloseCurrentPopup();
-        ImGui::EndPopup();
-    }
+    if(ImGui::Begin("Heatmap Window", &show_heatmap_window)){
+    //mImGui::SetNextWindowSize(ImVec2(ImGui::GetWindowWidth()*1,  ImGui::GetWindowHeight() * 1));
+    ImGui::Checkbox("ON Events ", &heatmap_filter.visualize_on);
+    ImGui::Checkbox("OFF Events ", &heatmap_filter.visualize_off);
+
+    ImPlot::BeginPlot("GAIA 4096", ImVec2(ImGui::GetWindowWidth() * 0.6, ImGui::GetWindowHeight() * 0.6)) ;
 
 
-    if (ImGui::Button("Start Save")) {
-        enable_record(true);
-    }
-    ImGui::SameLine();
+    float max_value = *std::max_element(std::begin(heatmap_filter.GAIAEvents), std::end(heatmap_filter.GAIAEvents));
+    float min_value = *std::min_element(std::begin(heatmap_filter.GAIAEvents), std::end(heatmap_filter.GAIAEvents));
 
-    if (ImGui::Button("Stop Save Events")) {
-        enable_record(false);
-        ImGui::OpenPopup("Stop Save Events");
-    }
-    if (ImGui::BeginPopupModal("Stop Save Events", NULL, ImGuiWindowFlags_MenuBar)) {
-        ImGui::Text("Name the file... ");
-        static char filename[128] = "Recordings/1901_CM_electrodestimulation/__NAME__.dat";
-        ImGui::InputText(" ", filename, IM_ARRAYSIZE(filename));
-        ImGui::SameLine();
-        ImGui::PushID(0);
-        ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4) ImColor::HSV(3 / 7.0f, 0.6f, 0.6f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4) ImColor::HSV(3 / 7.0f, 0.7f, 0.7f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4) ImColor::HSV(3 / 7.0f, 0.8f, 0.8f));
-        bool save_button = false;
-        save_button = ImGui::Button("Save");
-        ImGui::PopStyleColor(3);
-        ImGui::PopID();
-        if (save_button) {
-            copy_events(default_filename, filename);
-        }
-        ImGui::PushID(0);
-        ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4) ImColor::HSV(0 / 7.0f, 0.6f, 0.6f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4) ImColor::HSV(0 / 7.0f, 0.7f, 0.7f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4) ImColor::HSV(0 / 7.0f, 0.8f, 0.8f));
-        bool close_button = false;
-        close_button = ImGui::Button("Close");
-        ImGui::PopStyleColor(3);
-        ImGui::PopID();
-        if (close_button)
-            ImGui::CloseCurrentPopup();
-        ImGui::EndPopup();
-    }
-
-    if (stop_replay) {
-        live = true;
-        playback = false;
-    }
-
-    if (live == false && playback == true) {
-        populate_index_time_bin(itorator);
-        if (next_replay) {
-            while (index_time_plot == -1) {
-                itorator++;
-                populate_index_time_bin(itorator);
-                next_replay = true;
-            }
-        }
-        next_replay = false;
-        if (index_time_plot > 0) {
-            for (int i = 0; i < index_time_plot; i++) {
-                float color = (loaded_gaia_events[i].ts * sampling_frequency - (tmp1)) / (tmp2 - tmp1);
-
-                if (loaded_gaia_events[i].p == 1) {
-                    GAIAEvents[(74 - loaded_gaia_events[i].y) * 75 + loaded_gaia_events[i].x] =
-                            colormap_on_color_lowbound + color;
-                } else if (loaded_gaia_events[i].p == 0) {
-                    GAIAEvents[(74 - loaded_gaia_events[i].y) * 75 + loaded_gaia_events[i].x] =
-                            colormap_off_color_lowbound + color;
-                } else if (loaded_gaia_events[i].p == 3) {
-                    GAIAEvents[(74 - loaded_gaia_events[i].y) * 75 + loaded_gaia_events[i].x] = dummycolor;
-                }
-            }
-        }
-        itorator = itorator + 1;
-    }
-    if(heatmap_plot) {
-        live = false;
-        playback = false;
-        record = false;
-        for (int i = 0; i < loaded_gaia_events.size(); i++) {
-            if (heatmap_on_ev and loaded_gaia_events[i].p == 1)
-            {
-                GAIAEvents[(74 - loaded_gaia_events[i].y) * 75 + loaded_gaia_events[i].x] += 1;
-            }
-            if (heatmap_off_ev and loaded_gaia_events[i].p == 0)
-            {
-                GAIAEvents[(74 - loaded_gaia_events[i].y) * 75 + loaded_gaia_events[i].x] += 1;
-            }
-        }
-        float max_count=GAIAEvents[0] ;
-
-        for (int i = 0; i < LEN_GAIAEVENTS; i++) {
-            if (GAIAEvents[i] > max_count) {
-                max_count = GAIAEvents[i];
-            }
-        }
-        for (int i = 0; i < LEN_GAIAEVENTS; i++) {
-            GAIAEvents[i] /= max_count;
-        }
-
-    }
-
-    if (live == true && playback == false) {
-        for (unsigned int i = 0; i < gaia_events.size(); i++) {
-            Event2d event = gaia_events[i];
-            if (record) {
-                WriteEvent(ofs, event);
-            }
-            if (event.p == 1) {
-                GAIAEvents[(74 - event.y) * 75 + event.x] = colormap_on_color_upbound;
-            } else if (event.p == 0) {
-                GAIAEvents[(74 - event.y) * 75 + event.x] = colormap_off_color_upbound;
-            }
-        }
-        gaia_events.clear();
-        gaia_events.shrink_to_fit();
-    }
-
-    if (ImGui::Button("Save Plot")) {
-        ushort GAIA_heat[75][75][3] = {0};
-        for (int i = 0; i < loaded_gaia_events.size(); i++) {
-            GAIA_heat[loaded_gaia_events[i].y][loaded_gaia_events[i].x][0] += 1;
-            if (loaded_gaia_events[i].p==0)
-            {
-                GAIA_heat[loaded_gaia_events[i].y][loaded_gaia_events[i].x][1] += 1;
-            }
-            if (loaded_gaia_events[i].p==1)
-            {
-                GAIA_heat[loaded_gaia_events[i].y][loaded_gaia_events[i].x][2] += 1;
-            }
-        }
-        cv::Mat mat(75, 75,  CV_16UC3);
-        std::memcpy(mat.data, GAIA_heat, 75*75*3*sizeof(ushort));
-        cv::imwrite("event_hist/Test.png", mat);
-    }
-
-    if (ImPlot::BeginPlot("GAIA 4096", ImVec2(ImGui::GetWindowWidth() * 0.6, ImGui::GetWindowHeight() * 0.6))) {
-        ImGui::Text("X vertical - 0 on top; Y horizonal - 0 left");
-        ImPlot::PlotHeatmap("GAIA HEATMAP ", GAIAEvents, 75, 75, 0, 5, NULL, ImPlotPoint(0, 0), ImPlotPoint(75, 75));
+        ImPlot::PlotHeatmap("GAIA HEATMAP ", heatmap_filter.GAIAEvents, 75, 75, min_value, max_value, NULL, ImPlotPoint(0, 0), ImPlotPoint(75, 75));
 
         if (ImPlot::IsPlotHovered() && ImGui::IsMouseClicked(0)) {
             ImPlotPoint pt = ImPlot::GetPlotMousePos();
-            if (event_trace_plot) {
-                X_plot.push_back(floor(pt.x));
-                Y_plot.push_back(floor(pt.y));
-            }
-            if (hot_pixels) {
+            if (hotpixel_active) {
                 Event2d ev;
-
                 ev.x = floor(pt.x);
                 ev.y = floor(pt.y);
-                blacklist.push_back(ev);
+                heatmap_filter.blacklist.push_back(ev);
             }
         }
-        //todo: fix time axis of roi plot
-        //todo:
+
         ImPlot::EndPlot();
+
+        ImGui::SameLine();
+    static ImPlotColormap map = ImPlotColormap_Jet;
+    ImPlot::PushColormap(map);
+    ImPlot::ColormapScale("##ID",min_value, max_value,ImVec2(60,225));
+
+    ImGui::NewLine();
+    ImGui::Text("Number of events: %d",heatmap_filter.event_number);
+    ImGui::Text("Number of ON events: %d",heatmap_filter.event_number_on);
+    ImGui::Text("Number of OFF events: %d",heatmap_filter.event_number_off);
+    ImGui::Text("Blacklist: ");
+    for (int i=0;i<heatmap_filter.blacklist.size();i++){
+        ImGui::Text(" %d-%d ",heatmap_filter.blacklist[i].x ,heatmap_filter.blacklist[i].y);
     }
+    // Draw the event plot over time
+        if (ImPlot::BeginPlot("Event Counts", "Time (us)", "Event Count", ImVec2(ImGui::GetWindowWidth() * 0.6, ImGui::GetWindowHeight() * 0.5))) {
+            ImPlot::PushStyleColor(ImPlotCol_Line, ImVec4(0.0f, 1.0f, 0.0f, 1.0f)); // Green for ON events
+            ImPlot::PlotLine("ON Events", &heatmap_filter.onEventCounts[0], heatmap_filter.onEventCounts.size(), 0,
+                             sizeof(int));
+            ImPlot::PopStyleColor();
 
+            ImPlot::PushStyleColor(ImPlotCol_Line, ImVec4(1.0f, 0.0f, 0.0f, 1.0f)); // Red for OFF events
+            ImPlot::PlotLine("OFF Events", &heatmap_filter.offEventCounts[0], heatmap_filter.offEventCounts.size(), 0,
+                             sizeof(int));
+            ImPlot::PopStyleColor();
 
-
-    if (ImGui::Begin("ROI visualization", &event_trace_plot))
-    {
-        ImGui::InputFloat("Time resolution ", &interval_time, 0.000001, 0.0001, "%06f" );
-        ImGui::NewLine();
-        ImGui::Text("Input X-Y address: " );
-        ImGui::InputFloat("X address to add: ", &new_X_plot);
-        ImGui::NewLine();
-
-        ImGui::InputFloat("Y address to add: ",&new_Y_plot);
-        ImGui::NewLine();
-
-
-
-        if (ImGui::Checkbox("Add", &add_plot))
-        {
-            X_plot.push_back(int(new_X_plot));
-            Y_plot.push_back(int(new_Y_plot));
-            add_plot= false;
-        }
-        if (ImGui::Checkbox("Add all", &add_plot_all))
-        {
-            for (int i=0;i<75;i++)
-            {
-                X_plot.push_back(i);
-                for (int k=0;k<75;k++) {
-                    Y_plot.push_back(k);
-                }
-            }
-            add_plot_all= false;
-        }
-        ImGui::NewLine();
-        ImGui::Text("Remove X-Y address: " );
-        ImGui::NewLine();
-        ImGui::InputFloat("X address to remove: ", &rm_X_plot);
-        ImGui::NewLine();
-        ImGui::InputFloat("Y address to remove: ",&rm_Y_plot);
-        if (ImGui::Checkbox("Remove", &rm_plot))
-        {
-            int rm_it= 0;
-            for (int i=0; i<Y_plot.size();i++){if (Y_plot[i]==int(rm_Y_plot)){rm_it = i; break;}}
-            Y_plot.erase(Y_plot.begin()+rm_it );
-            for (int i=0; i<X_plot.size();i++){if (X_plot[i]==int(rm_X_plot)){rm_it = i; break;}}
-            X_plot.erase(X_plot.begin()+rm_it);
-            rm_plot= false;
-        }
-        if (ImGui::Checkbox("Remove all", &rm_plot_all))
-        {
-
-            Y_plot.erase(Y_plot.begin(), Y_plot.end());
-            X_plot.erase(X_plot.begin(), X_plot.end());
-            rm_plot_all= false;
-        }
-
-        ImGui::Text("X-Y addresses in ROI: " );
-        for (int i=0; i<X_plot.size();i++){
-            ImGui::SameLine();
-            ImGui::Text("%i-%i ",X_plot[i],Y_plot[i] );
-        }
-        ImGui::NewLine();
-
-
-        if ( ImPlot::BeginPlot("Event visualization",  ImVec2(ImGui::GetWindowWidth()*0.7, ImGui::GetWindowHeight()*0.7)))
-        {
-            ImPlot::SetupAxisLimits(ImAxis_X1,0,plt_ev.size());//
-            ImPlot::SetupAxisLimits(ImAxis_Y1,0, 10);//max_y
-            ImPlot::PlotLine("Channel X,Y", &plt_time[0],&plt_ev[0],(plt_ev.size()));
             ImPlot::EndPlot();
         }
-        ImGui::End();
-    }
     ImGui::End();
-}
-void Visualizer::populate_index_time_bin(int itorator)
-{
-
-    if (pause_replay == false)
-    {
-        tmp1 =  tmp2;
-        tmp2 = tmp1 + ((1./fps)/ slow_down);
-    }
-    if (pause_replay == true && next_replay==true )
-    {
-        tmp1 =  tmp2;
-        tmp2 = tmp1 + ((1./fps)/ slow_down);
-    }
-
-
-    if (itorator == 0) // to start the visualization at the right time
-    {
-        tmp1= (loaded_gaia_events[0].ts*sampling_frequency);
-        tmp2 = tmp1 + ((1./fps)/ slow_down);
-    }
-    //Delete plotted elements from buffer
-    if ((index_time_plot>0 and pause_replay==false) or (index_time_plot>0 and next_replay==true)  )
-    {
-        loaded_gaia_events.erase (loaded_gaia_events.begin(), loaded_gaia_events.begin()+index_time_plot);
-        loaded_gaia_events.shrink_to_fit();
-
-    }
-    index_time_plot = -1;
-    //Select which events to plot at this iteration
-    for (int ff =0; ff < (loaded_gaia_events.size()); ++ff)
-    {
-        if (  loaded_gaia_events[ff].ts*sampling_frequency <= tmp2 ) 
-        {
-            index_time_plot = ff+1;
-        }
-    } 
-
-    if (loaded_gaia_events.size() ==0) 
-    {
-        cout << "All out of events to plot" << endl;
-        live=true;
-        playback = false;
-        loaded_gaia_events.clear();    
     }
 }
 
-float Visualizer::distance_calculator(Event2d p1,Event2d p2 )
-{   //calculating Euclidean distance
-    float distance=0;
-    float p = abs(int(p1.x - p2.x));
-    float l = abs(int(p1.y - p2.y));
-    distance = pow(p, 2.) + pow(l, 2.);
-    distance = sqrt(distance);
-    return distance;
+void Visualizer::processEvents(std::vector<Event2d>& input_events, uint8_t filter_map) {
+
+    // playback of pre-recorded events
+    if(heatmap_active){
+        drawHeatmap();
+    }
+
+    if (isPlayback){
+        updateEventTimeframe();
+    }
+    // Hotpixel filter
+    if ((filter_map & (1 << Hotpixel))){
+        hotPixel_Filter.process(input_events);
+    }
+
+    // SAVING EVENTS!
+    if (recording_active != prev_recording_active && (filter_map & (1 << Recording))) {
+        recordingInitializer();
+    }
+    if (recording_active != prev_recording_active&& !(filter_map & (1 << Recording)) ) {
+        recordingFinisher();
+    }
+    if (recording_filter) {
+        recording_filter->process(input_events);
+    }
+
+    prev_recording_active = recording_active;
+    if(isLive && coincidence_active){
+
+      //  CoincidenceFilter.liveFiltering(gaia_events);
+    }
+
+}
+bool Visualizer::checkFifoFull(bool fifo_full) {
+    return fifo_full;
 }
 
-void Visualizer::background_filter( )
-{
-    float dist;
-    float time;
-    for (int i =0; i<loaded_gaia_events_all.size()-1; i++){
+void Visualizer::drawCanvas(bool* live_visualization_open) {
 
-        for (int j =i; j<loaded_gaia_events_all.size()-1; j++){
-            time = ((loaded_gaia_events_all[j].ts - loaded_gaia_events_all[i].ts))*sampling_frequency;
+      for (const auto& event : gaia_events) {
+          ImVec2 center(event.x * circle_diameter + circle_diameter / 2.0f + pixels_X_offset,
+                        event.y * circle_diameter + circle_diameter / 2.0f + pixels_Y_offset);
+          ImU32 color;
+          if (event.p == 0) {
+              color = ImColor(255, 0, 0, 150); // Red
+          } else {
+              color = ImColor(0, 255, 0, 150); // Green
+          }
+          // Draw the dot
+          ImGui::GetWindowDrawList()->AddCircleFilled(center, circle_diameter / 2.0f, color);
+      }
+      popIncomingEvents();
+}
+void Visualizer::popIncomingEvents() {
+    if (coincidence_active && isLive) {
+        int64_t time_threshold = CoincidenceFilter.time_cutoff * 1e2; //
+        // Remove events older than the specified time threshold
+        gaia_events.erase(std::remove_if(gaia_events.begin(), gaia_events.end(),
+                                         [this, time_threshold](const Event2d &event) {
+                                             return (current_timestamp - event.ts) > time_threshold;
+                                         }),
+                          gaia_events.end());
+    }
+    else {
+        gaia_events.clear();
+        gaia_events.shrink_to_fit();
+    }
+}
 
-            if  ( time >= time_cutoff) {break;}
-            if  ( time < time_cutoff and i !=j)
-            {
-                dist = distance_calculator(loaded_gaia_events_all[i], loaded_gaia_events_all[j]);
 
-                if (dist <= distance_cutoff and dist > 0.1) {
+pixel_click Visualizer::onMouseClick(int mouse_x, int mouse_y) {
+    pixel_click clicked_pixel;
+    clicked_pixel.x = (mouse_x - pixels_X_offset) / circle_diameter;
+    clicked_pixel.y = (mouse_y - pixels_Y_offset) / circle_diameter;
+   // std::cout << "Sensor pixel selected: (" << clicked_pixel.x << ", " << clicked_pixel.y << ")\n";
+return clicked_pixel;
+}
 
-                    loaded_gaia_events.push_back(loaded_gaia_events_all[i]);
-                    loaded_gaia_events.push_back(loaded_gaia_events_all[j]);
-                    break;
+void Visualizer::handleMouseClick() {
+    if (!show_file_picker) {
+        if (ImGui::IsMouseClicked(0)) { // Check for left mouse button click
+            ImVec2 mouse_pos = ImGui::GetMousePos(); // Get mouse position in screen coordinates
+            int mouse_x = static_cast<int>(mouse_pos.x);
+            int mouse_y = static_cast<int>(mouse_pos.y);
+
+            // Ensure that the click is within the canvas area
+            if (mouse_x >= pixels_X_offset && mouse_x < pixels_X_offset + 75 * circle_diameter &&
+                mouse_y >= pixels_Y_offset && mouse_y < pixels_Y_offset + 75 * circle_diameter) {
+                pixel_click clicked_pixel = onMouseClick(mouse_x, mouse_y);
+                if (hotpixel_active) {
+                    hotPixel_Filter.checkHotpixel(clicked_pixel.x, clicked_pixel.y);
                 }
             }
         }
     }
 }
+void Visualizer::recordingInitializer() {
+    if (recording_active) {
+        if (recording_filter == nullptr) {
+            recording_filter = new RecordingFilter(filename);
+        }
+        recording_filter->enable_record();
 
-void Visualizer::hot_pixel_filter() {
-    if (bg_noise) {
-        for (auto it = loaded_gaia_events_all.begin(); it != loaded_gaia_events_all.end(); it++) {
-            if (std::find_if(blacklist.begin(), blacklist.end(),
-                             [&it](Event2d &ev) { return ev.x == it->x && ev.y == it->y; }) != blacklist.end()) {
-                it = loaded_gaia_events_all.erase(it);
-            }
-        }
-    } else {
-        for (auto it = loaded_gaia_events.begin(); it != loaded_gaia_events.end(); it++) {
-            if (std::find_if(blacklist.begin(), blacklist.end(),
-                             [&it](Event2d &ev) { return ev.x == it->x && ev.y == it->y; }) != blacklist.end()) {
-                it = loaded_gaia_events.erase(it);
-            }
-        }
     }
+}
+void Visualizer::recordingFinisher() {
+    recording_filter->enable_record();
+    show_rename_popup = true;
+
+    if (recording_filter != nullptr) {
+        delete recording_filter;
+        recording_filter = nullptr;
+    }
+}
+
+void Visualizer::showSavingPopup(const std::string& filename) {
+
+    if (show_rename_popup) {
+        ImGui::OpenPopup("Rename File");
+    }
+    if (ImGui::BeginPopupModal("Rename File", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+
+        ImGui::Text("Name the file... ");
+
+        static char new_filename[128] = "NAME__.dat\" ";
+        ImGui::InputText(" ", new_filename, IM_ARRAYSIZE(new_filename));
+
+        if (ImGui::Button("Save")) {
+            std::string new_path = "" + std::string(new_filename);
+            std::rename(filename.c_str(), new_path.c_str());
+            show_rename_popup = false;
+            ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel")) {
+            show_rename_popup = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+}
+
+void Visualizer::sortEvents() {
+    // Sort the events based on their timestamps
+    std::sort(gaia_loaded_events.begin(), gaia_loaded_events.end(), [](const Event2d& a, const Event2d& b) {
+        return a.ts < b.ts;
+    });
+    // Remove duplicates from the sorted array
+    auto last_unique = std::unique(gaia_loaded_events.begin(), gaia_loaded_events.end(),
+                                   [](const Event2d& a, const Event2d& b) {
+        return a.x == b.x && a.y == b.y && a.ts == b.ts && a.p == b.p;
+    });
+
+    // Resize the vector to remove the duplicate elements
+    gaia_loaded_events.resize(std::distance(gaia_loaded_events.begin(), last_unique));
 
 }

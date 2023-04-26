@@ -87,7 +87,7 @@ public:
   uint64_t data_count;
   unsigned char g_rbuf[BLOCK_SIZE];
   std::mutex ev_buffer_lock;
-
+  bool fifo_full;
 
 private:
 

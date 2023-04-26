@@ -635,9 +635,9 @@ void Visualizer::ShowGaiaVisualization(bool* live_visualization_open, bool reset
     }
     ImGui::End();
 }
+
 void Visualizer::populate_index_time_bin(int itorator)
 {
-
     if (pause_replay == false)
     {
         tmp1 =  tmp2;
